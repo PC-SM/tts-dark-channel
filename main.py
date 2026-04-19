@@ -87,7 +87,7 @@ async def montar(req: VideoRequest):
     with open(audio_path, "wb") as f:
         f.write(base64.b64decode(req.audio_base64))
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         imagens = []
         for kw in req.palavras_chave[:3]:
             resp = await client.get(
@@ -97,18 +97,18 @@ async def montar(req: VideoRequest):
             )
             data = resp.json()
             for photo in data.get("photos", []):
-                imagens.append(photo["src"]["large"])
-            if len(imagens) >= 10:
+                imagens.append(photo["src"]["medium"])
+            if len(imagens) >= 9:
                 break
 
     if not imagens:
         raise Exception("Nenhuma imagem encontrada na Pexels")
 
     img_paths = []
-    async with httpx.AsyncClient() as client:
-        for idx, url in enumerate(imagens[:10]):
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for idx, url in enumerate(imagens[:9]):
             img_resp = await client.get(url)
-            img_path = os.path.join(tmpdir, f"img_{idx}.jpg")
+            img_path = os.path.join(tmpdir, f"img_{idx:03d}.jpg")
             with open(img_path, "wb") as f:
                 f.write(img_resp.content)
             img_paths.append(img_path)
@@ -120,37 +120,46 @@ async def montar(req: VideoRequest):
     with open(list_path, "w") as f:
         for img_path in img_paths:
             f.write(f"file '{img_path}'\n")
-            f.write(f"duration {tempo_por_imagem}\n")
+            f.write(f"duration {tempo_por_imagem:.2f}\n")
         f.write(f"file '{img_paths[-1]}'\n")
+        f.write(f"duration 1\n")
 
     slideshow_path = os.path.join(tmpdir, "slideshow.mp4")
     result1 = subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0",
         "-i", list_path,
-        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
-        "-c:v", "libx264", "-r", "24", slideshow_path
+        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+        "-c:v", "libx264", "-preset", "ultrafast", "-r", "25",
+        "-pix_fmt", "yuv420p",
+        slideshow_path
     ], capture_output=True, text=True)
 
-    if not os.path.exists(slideshow_path):
-        raise Exception(f"Slideshow falhou: {result1.stderr[-2000:]}")
+    if not os.path.exists(slideshow_path) or os.path.getsize(slideshow_path) < 1000:
+        raise Exception(f"Slideshow falhou: {result1.stderr[-3000:]}")
 
     video_path = os.path.join(tmpdir, "video_final.mp4")
     result2 = subprocess.run([
         "ffmpeg", "-y",
         "-i", slideshow_path,
         "-i", audio_path,
-        "-c:v", "copy", "-c:a", "aac",
-        "-shortest", video_path
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-shortest",
+        video_path
     ], capture_output=True, text=True)
 
-    if not os.path.exists(video_path):
-        raise Exception(f"Video final falhou: {result2.stderr[-2000:]}")
+    if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000:
+        raise Exception(f"Video final falhou: {result2.stderr[-3000:]}")
 
     with open(video_path, "rb") as f:
         video_b64 = base64.b64encode(f.read()).decode()
 
     for arq in os.listdir(tmpdir):
-        os.remove(os.path.join(tmpdir, arq))
+        try:
+            os.remove(os.path.join(tmpdir, arq))
+        except:
+            pass
     os.rmdir(tmpdir)
 
     return {
