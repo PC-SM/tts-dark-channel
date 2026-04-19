@@ -7,8 +7,6 @@ import tempfile
 import os
 import re
 from typing import List
-from pydub import AudioSegment
-import io
 
 app = FastAPI()
 
@@ -51,21 +49,11 @@ async def narrar(
 
 @app.post("/juntar")
 async def juntar(req: JuntarRequest):
-    combined = AudioSegment.empty()
-    
+    combined_bytes = b""
     for b64 in req.blocos_base64:
-        audio_bytes = base64.b64decode(b64)
-        segment = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-        combined += segment
+        combined_bytes += base64.b64decode(b64)
 
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-        tmpfile = f.name
-    
-    combined.export(tmpfile, format="mp3")
-    
-    with open(tmpfile, "rb") as f:
-        audio_final_b64 = base64.b64encode(f.read()).decode()
-    os.unlink(tmpfile)
+    audio_final_b64 = base64.b64encode(combined_bytes).decode()
 
     return {
         "audio_base64": audio_final_b64,
