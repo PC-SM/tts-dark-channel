@@ -1,1 +1,1 @@
-web: uvicorn main:app --host 0.0.0.0 --port $PORT
+web: bash setup.sh && uvicorn main:app --host 0.0.0.0 --port $PORT
