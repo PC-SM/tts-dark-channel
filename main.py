@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 import edge_tts
-import asyncio
 import base64
 import tempfile
 import os
@@ -30,6 +29,17 @@ def converter_pausas(texto: str) -> str:
     texto = re.sub(r'\[PAUSA_LONGA\]', '. . . . .', texto)
     texto = re.sub(r'\[PAUSA\]', '. . .', texto)
     return texto
+
+def get_duracao(audio_path: str) -> float:
+    result = subprocess.run(
+        ["ffmpeg", "-i", audio_path, "-f", "null", "-"],
+        capture_output=True, text=True
+    )
+    match = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", result.stderr)
+    if not match:
+        return 60.0
+    h, m, s = match.groups()
+    return int(h) * 3600 + int(m) * 60 + float(s)
 
 @app.post("/narrar")
 async def narrar(
@@ -100,15 +110,8 @@ async def montar(req: VideoRequest):
                 f.write(img_resp.content)
             img_paths.append(img_path)
 
-   result = subprocess.run(
-    ["ffmpeg", "-i", audio_path, "-f", "null", "-"],
-    capture_output=True, text=True
-    )
-    import re as re2
-    match = re2.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", result.stderr)
-    h, m, s = match.groups()
-    duracao = int(h) * 3600 + int(m) * 60 + float(s)
-        tempo_por_imagem = duracao / len(img_paths)
+    duracao = get_duracao(audio_path)
+    tempo_por_imagem = duracao / len(img_paths)
 
     list_path = os.path.join(tmpdir, "images.txt")
     with open(list_path, "w") as f:
