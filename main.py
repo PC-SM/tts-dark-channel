@@ -101,6 +101,9 @@ async def montar(req: VideoRequest):
             if len(imagens) >= 10:
                 break
 
+    if not imagens:
+        raise Exception("Nenhuma imagem encontrada na Pexels")
+
     img_paths = []
     async with httpx.AsyncClient() as client:
         for idx, url in enumerate(imagens[:10]):
@@ -121,21 +124,27 @@ async def montar(req: VideoRequest):
         f.write(f"file '{img_paths[-1]}'\n")
 
     slideshow_path = os.path.join(tmpdir, "slideshow.mp4")
-    subprocess.run([
+    result1 = subprocess.run([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
         "-i", list_path,
         "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
         "-c:v", "libx264", "-r", "24", slideshow_path
-    ], capture_output=True)
+    ], capture_output=True, text=True)
+
+    if not os.path.exists(slideshow_path):
+        raise Exception(f"Slideshow falhou: {result1.stderr[-2000:]}")
 
     video_path = os.path.join(tmpdir, "video_final.mp4")
-    subprocess.run([
+    result2 = subprocess.run([
         "ffmpeg", "-y",
         "-i", slideshow_path,
         "-i", audio_path,
         "-c:v", "copy", "-c:a", "aac",
         "-shortest", video_path
-    ], capture_output=True)
+    ], capture_output=True, text=True)
+
+    if not os.path.exists(video_path):
+        raise Exception(f"Video final falhou: {result2.stderr[-2000:]}")
 
     with open(video_path, "rb") as f:
         video_b64 = base64.b64encode(f.read()).decode()
