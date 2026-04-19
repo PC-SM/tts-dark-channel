@@ -2,5 +2,3 @@ fastapi
 uvicorn
 edge-tts
 httpx
-google-api-python-client
-google-auth
