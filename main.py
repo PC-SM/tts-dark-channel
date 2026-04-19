@@ -100,13 +100,15 @@ async def montar(req: VideoRequest):
                 f.write(img_resp.content)
             img_paths.append(img_path)
 
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
-        capture_output=True, text=True
+   result = subprocess.run(
+    ["ffmpeg", "-i", audio_path, "-f", "null", "-"],
+    capture_output=True, text=True
     )
-    duracao = float(probe.stdout.strip())
-    tempo_por_imagem = duracao / len(img_paths)
+    import re as re2
+    match = re2.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", result.stderr)
+    h, m, s = match.groups()
+    duracao = int(h) * 3600 + int(m) * 60 + float(s)
+        tempo_por_imagem = duracao / len(img_paths)
 
     list_path = os.path.join(tmpdir, "images.txt")
     with open(list_path, "w") as f:
