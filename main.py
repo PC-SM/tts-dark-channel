@@ -7,7 +7,11 @@ import os
 import re
 import httpx
 import subprocess
+import json
 from typing import List
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google.oauth2 import service_account
 
 app = FastAPI()
 
@@ -24,6 +28,7 @@ class VideoRequest(BaseModel):
     palavras_chave: List[str]
     titulo: str
     pexels_key: str
+    drive_folder_id: str
 
 def converter_pausas(texto: str) -> str:
     texto = re.sub(r'\[PAUSA_LONGA\]', '. . . . .', texto)
@@ -40,6 +45,29 @@ def get_duracao(audio_path: str) -> float:
         return 60.0
     h, m, s = match.groups()
     return int(h) * 3600 + int(m) * 60 + float(s)
+
+def get_drive_service():
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
+    creds_dict = json.loads(creds_json)
+    creds = service_account.Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    return build("drive", "v3", credentials=creds)
+
+def upload_to_drive(file_path: str, filename: str, folder_id: str) -> str:
+    service = get_drive_service()
+    file_metadata = {
+        "name": filename,
+        "parents": [folder_id]
+    }
+    media = MediaFileUpload(file_path, mimetype="video/mp4", resumable=True)
+    file = service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id, webViewLink"
+    ).execute()
+    return file.get("webViewLink")
 
 @app.post("/narrar")
 async def narrar(
@@ -152,8 +180,8 @@ async def montar(req: VideoRequest):
     if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000:
         raise Exception(f"Video final falhou: {result2.stderr[-3000:]}")
 
-    with open(video_path, "rb") as f:
-        video_b64 = base64.b64encode(f.read()).decode()
+    nome_arquivo = req.titulo.encode('ascii', 'ignore').decode().replace(' ', '_')[:60] + "_VIDEO.mp4"
+    link = upload_to_drive(video_path, nome_arquivo, req.drive_folder_id)
 
     for arq in os.listdir(tmpdir):
         try:
@@ -163,9 +191,9 @@ async def montar(req: VideoRequest):
     os.rmdir(tmpdir)
 
     return {
-        "video_base64": video_b64,
+        "drive_link": link,
         "titulo": req.titulo,
-        "formato": "mp4"
+        "nome_arquivo": nome_arquivo
     }
 
 @app.get("/")
