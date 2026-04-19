@@ -9,9 +9,6 @@ import httpx
 import subprocess
 import json
 from typing import List
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from google.oauth2 import service_account
 
 app = FastAPI()
 
@@ -45,37 +42,6 @@ def get_duracao(audio_path: str) -> float:
         return 60.0
     h, m, s = match.groups()
     return int(h) * 3600 + int(m) * 60 + float(s)
-
-def get_drive_service():
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
-    creds_dict = json.loads(creds_json)
-    creds = service_account.Credentials.from_service_account_info(
-        creds_dict,
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    return build("drive", "v3", credentials=creds)
-
-def upload_to_drive(file_path: str, filename: str, folder_id: str) -> str:
-    service = get_drive_service()
-    file_metadata = {
-        "name": filename,
-        "parents": [folder_id]
-    }
-    media = MediaFileUpload(file_path, mimetype="video/mp4", resumable=True)
-    file = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields="id, webViewLink",
-        supportsAllDrives=True
-    ).execute()
-
-    service.permissions().create(
-        fileId=file.get("id"),
-        body={"type": "anyone", "role": "reader"},
-        supportsAllDrives=True
-    ).execute()
-
-    return file.get("webViewLink")
 
 @app.post("/narrar")
 async def narrar(
@@ -165,8 +131,8 @@ async def montar(req: VideoRequest):
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0",
         "-i", list_path,
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
-        "-c:v", "libx264", "-preset", "ultrafast", "-r", "25",
+        "-vf", "scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-r", "24",
         "-pix_fmt", "yuv420p",
         slideshow_path
     ], capture_output=True, text=True)
@@ -188,8 +154,10 @@ async def montar(req: VideoRequest):
     if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000:
         raise Exception(f"Video final falhou: {result2.stderr[-3000:]}")
 
+    with open(video_path, "rb") as f:
+        video_b64 = base64.b64encode(f.read()).decode()
+
     nome_arquivo = req.titulo.encode('ascii', 'ignore').decode().replace(' ', '_')[:60] + "_VIDEO.mp4"
-    link = upload_to_drive(video_path, nome_arquivo, req.drive_folder_id)
 
     for arq in os.listdir(tmpdir):
         try:
@@ -199,7 +167,7 @@ async def montar(req: VideoRequest):
     os.rmdir(tmpdir)
 
     return {
-        "drive_link": link,
+        "video_base64": video_b64,
         "titulo": req.titulo,
         "nome_arquivo": nome_arquivo
     }
