@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import edge_tts
 import base64
@@ -171,6 +172,21 @@ async def montar(req: VideoRequest):
         "titulo": req.titulo,
         "nome_arquivo": nome_arquivo
     }
+
+@app.get("/legal", response_class=HTMLResponse)
+def legal():
+    return """
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head><meta charset="UTF-8"><title>Legal</title></head>
+    <body>
+    <h1>Terms of Service</h1>
+    <p>This application is used for automated video publishing. By using this service you agree to comply with all applicable laws and platform terms of service.</p>
+    <h1>Privacy Policy</h1>
+    <p>This application does not collect or store personal data from users. Video content is processed automatically and published to social media platforms as configured by the operator.</p>
+    </body>
+    </html>
+    """
 
 @app.get("/")
 def health():
