@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from pydantic import BaseModel
 import edge_tts
 import asyncio
@@ -19,19 +19,28 @@ def converter_pausas(texto: str) -> str:
     return texto
 
 @app.post("/narrar")
-async def narrar(req: TTSRequest):
+async def narrar(
+    req: TTSRequest,
+    bloco_index: int = Query(0),
+    titulo: str = Query("")
+):
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         tmpfile = f.name
 
     texto_limpo = converter_pausas(req.texto)
-
     communicate = edge_tts.Communicate(texto_limpo, req.voz)
     await communicate.save(tmpfile)
 
     with open(tmpfile, "rb") as f:
         audio_b64 = base64.b64encode(f.read()).decode()
     os.unlink(tmpfile)
-    return {"audio_base64": audio_b64, "formato": "mp3"}
+    
+    return {
+        "audio_base64": audio_b64,
+        "formato": "mp3",
+        "bloco_index": bloco_index,
+        "titulo": titulo
+    }
 
 @app.get("/")
 def health():
