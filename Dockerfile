@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python -c 'import main; print(\"import ok\")' && python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
