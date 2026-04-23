@@ -454,4 +454,4 @@ def legal():
     return {
         "terms_of_service": "Este serviço é de uso privado.",
         "privacy_policy": "Nenhum dado pessoal é armazenado."
-    }
+    } 
