@@ -13,6 +13,53 @@ from typing import List, Optional
 
 app = FastAPI()
 
+# ──────────────────────────────────────────────
+# Dicionário de tradução PT → EN para Pexels
+# ──────────────────────────────────────────────
+TRADUCOES = {
+    "crime": "crime", "mistério": "mystery", "misterio": "mystery",
+    "assassinato": "murder", "morte": "death", "terror": "horror",
+    "assombrado": "haunted", "fantasma": "ghost", "sombrio": "dark",
+    "escuro": "darkness", "noite": "night", "floresta": "forest",
+    "abandono": "abandoned", "ruína": "ruins", "ruinas": "ruins",
+    "sangue": "blood", "violência": "violence", "violencia": "violence",
+    "serial": "serial killer", "sequestro": "kidnapping",
+    "desaparecimento": "missing person", "investigação": "investigation",
+    "investigacao": "investigation", "policia": "police", "polícia": "police",
+    "brasil": "brazil", "cidade": "city", "urbano": "urban",
+    "hospital": "hospital", "prisão": "prison", "prisao": "prison",
+    "cemitério": "cemetery", "cemiterio": "cemetery", "igreja": "church",
+    "chuva": "rain", "tempestade": "storm", "névoa": "fog", "nevoa": "fog",
+    "escuridão": "darkness", "escuridao": "darkness", "sombra": "shadow",
+    "medo": "fear", "pânico": "panic", "panico": "panic",
+    "conspiracao": "conspiracy", "conspiração": "conspiracy",
+    "governo": "government", "segredo": "secret", "mentira": "lie",
+    "traição": "betrayal", "traicao": "betrayal", "vingança": "revenge",
+    "vinganca": "revenge", "guerra": "war", "conflito": "conflict",
+    "acidente": "accident", "tragédia": "tragedy", "tragedia": "tragedy",
+    "desastre": "disaster", "explosão": "explosion", "explosao": "explosion",
+    "fogo": "fire", "incêndio": "fire", "incendio": "fire",
+    "agua": "water", "mar": "sea", "oceano": "ocean",
+    "montanha": "mountain", "deserto": "desert", "caverna": "cave",
+    "laboratorio": "laboratory", "laboratório": "laboratory",
+    "tecnologia": "technology", "hacker": "hacker", "virus": "virus",
+    "pandemia": "pandemic", "doença": "disease", "doenca": "disease",
+    "veneno": "poison", "droga": "drugs", "tráfico": "trafficking",
+    "trafico": "trafficking", "corrupção": "corruption", "corrupcao": "corruption",
+}
+
+def traduzir_palavras(palavras: List[str]) -> List[str]:
+    resultado = []
+    for p in palavras:
+        p_lower = p.lower().strip()
+        traduzido = TRADUCOES.get(p_lower, p_lower)
+        resultado.append(traduzido)
+    return resultado
+
+# ──────────────────────────────────────────────
+# Models
+# ──────────────────────────────────────────────
+
 class TTSRequest(BaseModel):
     texto: str
     voz: str = "pt-BR-AntonioNeural"
@@ -36,13 +83,17 @@ class VideoRequest(BaseModel):
     overlay_titulo: bool = True
     watermark_text: str = "CANAL DARK"
 
+# ──────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────
+
 def converter_pausas(texto: str) -> str:
     texto = re.sub(r'\[PAUSA_LONGA\]', '. . . . .', texto)
     texto = re.sub(r'\[PAUSA\]', '. . .', texto)
     return texto
 
 def sanitizar_titulo(titulo: str) -> str:
-    return re.sub(r"[^\w\s\-]", "", titulo)[:50].strip()
+    return re.sub(r"[^\w\s\-]", "", titulo)[:40].strip()
 
 def get_duracao(audio_path: str) -> float:
     result = subprocess.run(
@@ -66,6 +117,10 @@ def get_duracao_ffprobe(path: str) -> float:
     except Exception:
         return 5.0
 
+# ──────────────────────────────────────────────
+# Endpoints
+# ──────────────────────────────────────────────
+
 @app.post("/narrar")
 async def narrar(
     req: TTSRequest,
@@ -82,6 +137,7 @@ async def narrar(
     os.unlink(tmpfile)
     return {"audio_base64": audio_b64, "formato": "mp3", "bloco_index": bloco_index, "titulo": titulo}
 
+
 @app.post("/juntar")
 async def juntar(req: JuntarRequest):
     combined_bytes = b""
@@ -89,32 +145,45 @@ async def juntar(req: JuntarRequest):
         combined_bytes += base64.b64decode(b64)
     return {"audio_base64": base64.b64encode(combined_bytes).decode(), "titulo": req.titulo, "formato": "mp3"}
 
+
 @app.post("/montar")
 async def montar(req: VideoRequest):
     tmpdir = tempfile.mkdtemp()
+    W, H = "1280", "720"
+
     try:
+        # ── 1. Salvar narração ───────────────────────────────────────
         audio_path = os.path.join(tmpdir, "narration.mp3")
         with open(audio_path, "wb") as f:
             f.write(base64.b64decode(req.audio_base64))
         duracao_total = get_duracao(audio_path)
 
+        # ── 2. Traduzir palavras-chave para inglês ───────────────────
+        palavras_en = traduzir_palavras(req.palavras_chave)
+
+        # ── 3. Buscar mídia visual ───────────────────────────────────
         media_paths = []
-        W, H = "854", "480"
 
         if req.usar_videos_pexels:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                for kw in req.palavras_chave[:4]:
+                for kw in palavras_en[:4]:
                     if len(media_paths) >= 8:
                         break
                     try:
                         r = await client.get(
                             "https://api.pexels.com/videos/search",
                             headers={"Authorization": req.pexels_key},
-                            params={"query": kw, "orientation": "landscape", "size": "medium", "per_page": 3}
+                            params={"query": kw, "orientation": "landscape",
+                                    "size": "medium", "per_page": 3}
                         )
                         for video in r.json().get("videos", []):
-                            files = sorted(video.get("video_files", []), key=lambda x: x.get("width", 0), reverse=True)
-                            hd = next((f for f in files if f.get("width", 0) <= 1920 and f.get("file_type") == "video/mp4"), files[0] if files else None)
+                            files = sorted(video.get("video_files", []),
+                                           key=lambda x: x.get("width", 0), reverse=True)
+                            hd = next(
+                                (f for f in files if f.get("width", 0) <= 1920
+                                 and f.get("file_type") == "video/mp4"),
+                                files[0] if files else None
+                            )
                             if hd:
                                 dest = os.path.join(tmpdir, f"clip_{len(media_paths):02d}.mp4")
                                 async with httpx.AsyncClient(timeout=60, follow_redirects=True) as dl:
@@ -128,18 +197,19 @@ async def montar(req: VideoRequest):
                     except Exception:
                         continue
 
+        # Fallback para fotos
         if len(media_paths) < 4:
             media_paths = []
             async with httpx.AsyncClient(timeout=30.0) as client:
                 imagens = []
-                for kw in req.palavras_chave[:3]:
+                for kw in palavras_en[:3]:
                     resp = await client.get(
                         "https://api.pexels.com/v1/search",
                         headers={"Authorization": req.pexels_key},
                         params={"query": kw, "per_page": 5, "orientation": "landscape"}
                     )
                     for photo in resp.json().get("photos", []):
-                        imagens.append(photo["src"]["medium"])
+                        imagens.append(photo["src"]["large"])
                     if len(imagens) >= 9:
                         break
                 for idx, url in enumerate(imagens[:9]):
@@ -155,32 +225,48 @@ async def montar(req: VideoRequest):
         if not media_paths:
             raise Exception("Nenhuma mídia encontrada")
 
+        # ── 4. Normalizar cada mídia → segmento MP4 ─────────────────
         n = len(media_paths)
-        dur_seg = max(3.0, min(duracao_total / n, 12.0))
+        dur_seg = max(4.0, min(duracao_total / n, 15.0))
         segmentos = []
 
         for idx, (tipo, path) in enumerate(media_paths):
             seg = os.path.join(tmpdir, f"seg_{idx:02d}.mp4")
+
             if tipo == "video":
                 dur_usar = min(get_duracao_ffprobe(path), dur_seg + req.duracao_transicao)
-                cmd = ["ffmpeg", "-y", "-i", path, "-t", str(dur_usar),
-                       "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p",
-                       "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-r", "24", "-an", seg]
+                cmd = [
+                    "ffmpeg", "-y", "-i", path, "-t", str(dur_usar),
+                    "-vf", (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p"),
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-r", "24", "-an", seg
+                ]
             else:
                 if req.ken_burns:
-                    z = "min(zoom+0.0015,1.3)" if random.choice([True, False]) else "if(lte(zoom,1.0),1.3,max(1.0,zoom-0.0015))"
-                    vf = f"scale=4000:-1,zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={int(dur_seg*24)}:s={W}x{H}:fps=24,format=yuv420p"
+                    z = ("min(zoom+0.0015,1.3)" if random.choice([True, False])
+                         else "if(lte(zoom,1.0),1.3,max(1.0,zoom-0.0015))")
+                    vf = (f"scale=5000:-1,"
+                          f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                          f":d={int(dur_seg*24)}:s={W}x{H}:fps=24,format=yuv420p")
                 else:
-                    vf = f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p"
-                cmd = ["ffmpeg", "-y", "-loop", "1", "-i", path, "-t", str(dur_seg),
-                       "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-r", "24", "-an", seg]
+                    vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                          f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p")
+                cmd = [
+                    "ffmpeg", "-y", "-loop", "1", "-i", path,
+                    "-t", str(dur_seg), "-vf", vf,
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-r", "24", "-an", seg
+                ]
+
             result = subprocess.run(cmd, capture_output=True)
-            if result.returncode == 0 and os.path.exists(seg):
+            if result.returncode == 0 and os.path.exists(seg) and os.path.getsize(seg) > 1000:
                 segmentos.append(seg)
 
         if not segmentos:
             raise Exception("Nenhum segmento gerado")
 
+        # ── 5. Concatenar segmentos ──────────────────────────────────
         slideshow_path = os.path.join(tmpdir, "slideshow.mp4")
         transicoes_ok = False
 
@@ -197,46 +283,91 @@ async def montar(req: VideoRequest):
                 offset += duracoes[i - 1] - td
                 label_out = "[vout]" if i == len(segmentos) - 1 else f"[v{i}]"
                 transition = random.choice(["fade", "dissolve", "wipeleft", "wiperight"])
-                filter_parts.append(f"{label_in}[{i}:v]xfade=transition={transition}:duration={td}:offset={offset:.3f}{label_out}")
+                filter_parts.append(
+                    f"{label_in}[{i}:v]xfade=transition={transition}:"
+                    f"duration={td}:offset={offset:.3f}{label_out}"
+                )
                 label_in = f"[v{i}]"
             result = subprocess.run(
-                ["ffmpeg", "-y", *input_args, "-filter_complex", ";".join(filter_parts),
-                 "-map", "[vout]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-r", "24", slideshow_path],
+                ["ffmpeg", "-y", *input_args,
+                 "-filter_complex", ";".join(filter_parts),
+                 "-map", "[vout]",
+                 "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "24",
+                 slideshow_path],
                 capture_output=True
             )
-            transicoes_ok = result.returncode == 0 and os.path.exists(slideshow_path)
+            transicoes_ok = (result.returncode == 0
+                             and os.path.exists(slideshow_path)
+                             and os.path.getsize(slideshow_path) > 1000)
 
         if not transicoes_ok:
             list_path = os.path.join(tmpdir, "segments.txt")
             with open(list_path, "w") as f:
                 for s in segmentos:
                     f.write(f"file '{s}'\n")
-            subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-                            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-r", "24", slideshow_path],
-                           capture_output=True)
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "24",
+                slideshow_path
+            ], capture_output=True)
 
         if not os.path.exists(slideshow_path) or os.path.getsize(slideshow_path) < 1000:
             raise Exception("Slideshow falhou")
 
+        # ── 6. Overlay: título + watermark ───────────────────────────
         if req.overlay_titulo or req.watermark_text:
             overlaid_path = os.path.join(tmpdir, "overlaid.mp4")
             vf_parts = []
             if req.overlay_titulo:
                 t = sanitizar_titulo(req.titulo)
-                vf_parts.append(f"drawtext=text='{t}':fontsize=36:fontcolor=white:x=(w-text_w)/2:y=h*0.75:shadowcolor=black@0.8:shadowx=2:shadowy=2:enable='between(t,0.5,5.5)'")
+                # Título menor, centralizado, com quebra se longo
+                vf_parts.append(
+                    f"drawtext=text='{t}':fontsize=28:fontcolor=white"
+                    f":x=(w-text_w)/2:y=h-text_h-40"
+                    f":shadowcolor=black@0.9:shadowx=2:shadowy=2"
+                    f":box=1:boxcolor=black@0.4:boxborderw=8"
+                    f":enable='between(t,0.5,6)'"
+                )
             if req.watermark_text:
                 wm = req.watermark_text.replace("'", "")
-                vf_parts.append(f"drawtext=text='{wm}':fontsize=16:fontcolor=white@0.45:x=w-text_w-10:y=h-text_h-10:shadowcolor=black@0.5:shadowx=1:shadowy=1")
-            result = subprocess.run(["ffmpeg", "-y", "-i", slideshow_path, "-vf", ",".join(vf_parts),
-                                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", overlaid_path],
-                                    capture_output=True)
-            if result.returncode == 0 and os.path.exists(overlaid_path):
+                vf_parts.append(
+                    f"drawtext=text='{wm}':fontsize=14:fontcolor=white@0.4"
+                    f":x=w-text_w-12:y=h-text_h-12"
+                    f":shadowcolor=black@0.5:shadowx=1:shadowy=1"
+                )
+            result = subprocess.run([
+                "ffmpeg", "-y", "-i", slideshow_path,
+                "-vf", ",".join(vf_parts),
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                overlaid_path
+            ], capture_output=True)
+            if result.returncode == 0 and os.path.exists(overlaid_path) and os.path.getsize(overlaid_path) > 1000:
                 slideshow_path = overlaid_path
 
+        # ── 7. Merge vídeo + narração — loop do slideshow p/ cobrir áudio
         video_path = os.path.join(tmpdir, "video_final.mp4")
-        subprocess.run(["ffmpeg", "-y", "-i", slideshow_path, "-i", audio_path,
-                        "-c:v", "copy", "-c:a", "aac", "-shortest", video_path],
-                       capture_output=True)
+        dur_slide = get_duracao_ffprobe(slideshow_path)
+
+        if dur_slide < duracao_total:
+            # Slideshow mais curto que o áudio — faz loop
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-stream_loop", "-1", "-i", slideshow_path,
+                "-i", audio_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest", "-map", "0:v", "-map", "1:a",
+                video_path
+            ], capture_output=True)
+        else:
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", slideshow_path,
+                "-i", audio_path,
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+                video_path
+            ], capture_output=True)
 
         if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000:
             raise Exception("Vídeo final falhou")
@@ -258,15 +389,17 @@ async def montar(req: VideoRequest):
         except Exception:
             pass
 
+
 @app.get("/legal", response_class=HTMLResponse)
 def legal():
     return """<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Legal</title></head>
     <body><h1>Terms of Service</h1><p>This application is used for automated video publishing.</p>
-    <h1>Privacy Policy</h1><p>This application does not collect or store personal data from users.</p></body></html>"""
+    <h1>Privacy Policy</h1><p>This application does not collect or store personal data from users.</p>
+    </body></html>"""
 
 @app.get("/")
 def health():
-    return {"status": "ok", "versao": "fase-a"}
+    return {"status": "ok", "versao": "fase-a-v2"}
 
 if __name__ == "__main__":
     import uvicorn
