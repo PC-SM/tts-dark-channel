@@ -9,12 +9,13 @@ import re
 import httpx
 import subprocess
 import random
+import json
 from typing import List, Optional
 
 app = FastAPI()
 
 # ──────────────────────────────────────────────
-# Dicionário de tradução PT → EN para Pexels
+# Tradução PT → EN para Pexels
 # ──────────────────────────────────────────────
 TRADUCOES = {
     "crime": "crime", "mistério": "mystery", "misterio": "mystery",
@@ -32,28 +33,26 @@ TRADUCOES = {
     "chuva": "rain", "tempestade": "storm", "névoa": "fog", "nevoa": "fog",
     "escuridão": "darkness", "escuridao": "darkness", "sombra": "shadow",
     "medo": "fear", "pânico": "panic", "panico": "panic",
-    "conspiracao": "conspiracy", "conspiração": "conspiracy",
+    "conspiração": "conspiracy", "conspiracao": "conspiracy",
     "governo": "government", "segredo": "secret", "mentira": "lie",
     "traição": "betrayal", "traicao": "betrayal", "vingança": "revenge",
     "vinganca": "revenge", "guerra": "war", "conflito": "conflict",
     "acidente": "accident", "tragédia": "tragedy", "tragedia": "tragedy",
-    "desastre": "disaster", "explosão": "explosion", "explosao": "explosion",
-    "fogo": "fire", "incêndio": "fire", "incendio": "fire",
+    "desastre": "disaster", "fogo": "fire", "incêndio": "fire",
     "agua": "water", "mar": "sea", "oceano": "ocean",
-    "montanha": "mountain", "deserto": "desert", "caverna": "cave",
-    "laboratorio": "laboratory", "laboratório": "laboratory",
     "tecnologia": "technology", "hacker": "hacker", "virus": "virus",
     "pandemia": "pandemic", "doença": "disease", "doenca": "disease",
     "veneno": "poison", "droga": "drugs", "tráfico": "trafficking",
     "trafico": "trafficking", "corrupção": "corruption", "corrupcao": "corruption",
+    "criança": "child", "crianca": "child", "família": "family", "familia": "family",
+    "cuba": "cuba", "eua": "usa", "político": "politics", "politico": "politics",
 }
 
 def traduzir_palavras(palavras: List[str]) -> List[str]:
     resultado = []
     for p in palavras:
         p_lower = p.lower().strip()
-        traduzido = TRADUCOES.get(p_lower, p_lower)
-        resultado.append(traduzido)
+        resultado.append(TRADUCOES.get(p_lower, p_lower))
     return resultado
 
 # ──────────────────────────────────────────────
@@ -75,8 +74,8 @@ class VideoRequest(BaseModel):
     pexels_key: str
     drive_folder_id: str = ""
     usar_videos_pexels: bool = True
-    ken_burns: bool = True
-    transicoes: bool = True
+    ken_burns: bool = False
+    transicoes: bool = False
     duracao_transicao: float = 0.8
     trilha_url: Optional[str] = None
     volume_trilha: float = 0.12
@@ -117,6 +116,84 @@ def get_duracao_ffprobe(path: str) -> float:
     except Exception:
         return 5.0
 
+async def get_google_token() -> Optional[str]:
+    """Obtém token de acesso OAuth2 via service account."""
+    try:
+        import time
+        import hmac
+        import hashlib
+
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS", "")
+        if not creds_json:
+            return None
+        creds = json.loads(creds_json)
+
+        # Monta JWT para service account
+        now = int(time.time())
+        header = base64.urlsafe_b64encode(
+            json.dumps({"alg": "RS256", "typ": "JWT"}).encode()
+        ).rstrip(b"=").decode()
+        payload = base64.urlsafe_b64encode(json.dumps({
+            "iss": creds["client_email"],
+            "scope": "https://www.googleapis.com/auth/drive.file",
+            "aud": "https://oauth2.googleapis.com/token",
+            "exp": now + 3600,
+            "iat": now
+        }).encode()).rstrip(b"=").decode()
+
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.backends import default_backend
+
+        private_key = serialization.load_pem_private_key(
+            creds["private_key"].encode(),
+            password=None,
+            backend=default_backend()
+        )
+        signing_input = f"{header}.{payload}".encode()
+        signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+        sig_b64 = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+        jwt_token = f"{header}.{payload}.{sig_b64}"
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": jwt_token
+                }
+            )
+            return r.json().get("access_token")
+    except Exception as e:
+        print(f"Erro ao obter token Google: {e}")
+        return None
+
+async def upload_drive(file_path: str, filename: str, folder_id: str, token: str) -> dict:
+    """Faz upload de arquivo para o Google Drive."""
+    metadata = json.dumps({"name": filename, "parents": [folder_id]}).encode()
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+
+    boundary = "boundary_upload_dark"
+    body = (
+        f"--{boundary}\r\n"
+        f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{json.dumps({'name': filename, 'parents': [folder_id]})}\r\n"
+        f"--{boundary}\r\n"
+        f"Content-Type: video/mp4\r\n\r\n"
+    ).encode() + file_content + f"\r\n--{boundary}--".encode()
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        r = await client.post(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": f"multipart/related; boundary={boundary}"
+            },
+            content=body
+        )
+        return r.json()
+
 # ──────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────
@@ -149,7 +226,7 @@ async def juntar(req: JuntarRequest):
 @app.post("/montar")
 async def montar(req: VideoRequest):
     tmpdir = tempfile.mkdtemp()
-    W, H = "1280", "720"
+    W, H = "854", "480"
 
     try:
         # ── 1. Salvar narração ───────────────────────────────────────
@@ -158,7 +235,7 @@ async def montar(req: VideoRequest):
             f.write(base64.b64decode(req.audio_base64))
         duracao_total = get_duracao(audio_path)
 
-        # ── 2. Traduzir palavras-chave para inglês ───────────────────
+        # ── 2. Traduzir palavras-chave ───────────────────────────────
         palavras_en = traduzir_palavras(req.palavras_chave)
 
         # ── 3. Buscar mídia visual ───────────────────────────────────
@@ -180,7 +257,7 @@ async def montar(req: VideoRequest):
                             files = sorted(video.get("video_files", []),
                                            key=lambda x: x.get("width", 0), reverse=True)
                             hd = next(
-                                (f for f in files if f.get("width", 0) <= 1920
+                                (f for f in files if f.get("width", 0) <= 1280
                                  and f.get("file_type") == "video/mp4"),
                                 files[0] if files else None
                             )
@@ -209,7 +286,7 @@ async def montar(req: VideoRequest):
                         params={"query": kw, "per_page": 5, "orientation": "landscape"}
                     )
                     for photo in resp.json().get("photos", []):
-                        imagens.append(photo["src"]["large"])
+                        imagens.append(photo["src"]["medium"])
                     if len(imagens) >= 9:
                         break
                 for idx, url in enumerate(imagens[:9]):
@@ -232,33 +309,30 @@ async def montar(req: VideoRequest):
 
         for idx, (tipo, path) in enumerate(media_paths):
             seg = os.path.join(tmpdir, f"seg_{idx:02d}.mp4")
-
             if tipo == "video":
                 dur_usar = min(get_duracao_ffprobe(path), dur_seg + req.duracao_transicao)
                 cmd = [
                     "ffmpeg", "-y", "-i", path, "-t", str(dur_usar),
                     "-vf", (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
                             f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p"),
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                     "-r", "24", "-an", seg
                 ]
             else:
                 if req.ken_burns:
                     z = ("min(zoom+0.0015,1.3)" if random.choice([True, False])
                          else "if(lte(zoom,1.0),1.3,max(1.0,zoom-0.0015))")
-                    vf = (f"scale=5000:-1,"
-                          f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-                          f":d={int(dur_seg*24)}:s={W}x{H}:fps=24,format=yuv420p")
+                    vf = (f"scale=4000:-1,zoompan=z='{z}':x='iw/2-(iw/zoom/2)'"
+                          f":y='ih/2-(ih/zoom/2)':d={int(dur_seg*24)}:s={W}x{H}:fps=24,format=yuv420p")
                 else:
                     vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
                           f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p")
                 cmd = [
                     "ffmpeg", "-y", "-loop", "1", "-i", path,
                     "-t", str(dur_seg), "-vf", vf,
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                     "-r", "24", "-an", seg
                 ]
-
             result = subprocess.run(cmd, capture_output=True)
             if result.returncode == 0 and os.path.exists(seg) and os.path.getsize(seg) > 1000:
                 segmentos.append(seg)
@@ -292,7 +366,7 @@ async def montar(req: VideoRequest):
                 ["ffmpeg", "-y", *input_args,
                  "-filter_complex", ";".join(filter_parts),
                  "-map", "[vout]",
-                 "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "24",
+                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-r", "24",
                  slideshow_path],
                 capture_output=True
             )
@@ -307,7 +381,7 @@ async def montar(req: VideoRequest):
                     f.write(f"file '{s}'\n")
             subprocess.run([
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-r", "24",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-r", "24",
                 slideshow_path
             ], capture_output=True)
 
@@ -320,62 +394,75 @@ async def montar(req: VideoRequest):
             vf_parts = []
             if req.overlay_titulo:
                 t = sanitizar_titulo(req.titulo)
-                # Título menor, centralizado, com quebra se longo
                 vf_parts.append(
-                    f"drawtext=text='{t}':fontsize=28:fontcolor=white"
-                    f":x=(w-text_w)/2:y=h-text_h-40"
+                    f"drawtext=text='{t}':fontsize=24:fontcolor=white"
+                    f":x=(w-text_w)/2:y=h-text_h-30"
                     f":shadowcolor=black@0.9:shadowx=2:shadowy=2"
-                    f":box=1:boxcolor=black@0.4:boxborderw=8"
+                    f":box=1:boxcolor=black@0.5:boxborderw=6"
                     f":enable='between(t,0.5,6)'"
                 )
             if req.watermark_text:
                 wm = req.watermark_text.replace("'", "")
                 vf_parts.append(
-                    f"drawtext=text='{wm}':fontsize=14:fontcolor=white@0.4"
-                    f":x=w-text_w-12:y=h-text_h-12"
-                    f":shadowcolor=black@0.5:shadowx=1:shadowy=1"
+                    f"drawtext=text='{wm}':fontsize=12:fontcolor=white@0.4"
+                    f":x=w-text_w-10:y=h-text_h-10"
                 )
             result = subprocess.run([
                 "ffmpeg", "-y", "-i", slideshow_path,
                 "-vf", ",".join(vf_parts),
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                 overlaid_path
             ], capture_output=True)
             if result.returncode == 0 and os.path.exists(overlaid_path) and os.path.getsize(overlaid_path) > 1000:
                 slideshow_path = overlaid_path
 
-        # ── 7. Merge vídeo + narração — loop do slideshow p/ cobrir áudio
+        # ── 7. Merge vídeo + narração com loop ───────────────────────
         video_path = os.path.join(tmpdir, "video_final.mp4")
         dur_slide = get_duracao_ffprobe(slideshow_path)
 
         if dur_slide < duracao_total:
-            # Slideshow mais curto que o áudio — faz loop
             subprocess.run([
                 "ffmpeg", "-y",
                 "-stream_loop", "-1", "-i", slideshow_path,
                 "-i", audio_path,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "192k",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                "-c:a", "aac", "-b:a", "128k",
                 "-shortest", "-map", "0:v", "-map", "1:a",
                 video_path
             ], capture_output=True)
         else:
             subprocess.run([
                 "ffmpeg", "-y",
-                "-i", slideshow_path,
-                "-i", audio_path,
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                "-shortest",
-                video_path
+                "-i", slideshow_path, "-i", audio_path,
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                "-shortest", video_path
             ], capture_output=True)
 
         if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000:
             raise Exception("Vídeo final falhou")
 
+        # ── 8. Upload direto para Google Drive ───────────────────────
+        nome = req.titulo.encode('ascii', 'ignore').decode().replace(' ', '_')[:60] + "_VIDEO.mp4"
+
+        if req.drive_folder_id:
+            token = await get_google_token()
+            if token:
+                drive_result = await upload_drive(video_path, nome, req.drive_folder_id, token)
+                file_id = drive_result.get("id", "")
+                file_link = drive_result.get("webViewLink", "")
+                return {
+                    "sucesso": True,
+                    "titulo": req.titulo,
+                    "nome_arquivo": nome,
+                    "drive_file_id": file_id,
+                    "drive_link": file_link,
+                    "duracao_segundos": round(duracao_total),
+                    "formato": "mp4"
+                }
+
+        # Fallback — retorna base64 apenas se não tiver Drive configurado
         with open(video_path, "rb") as f:
             video_b64 = base64.b64encode(f.read()).decode()
-
-        nome = req.titulo.encode('ascii', 'ignore').decode().replace(' ', '_')[:60] + "_VIDEO.mp4"
         return {"video_base64": video_b64, "titulo": req.titulo, "nome_arquivo": nome, "formato": "mp4"}
 
     finally:
@@ -399,7 +486,7 @@ def legal():
 
 @app.get("/")
 def health():
-    return {"status": "ok", "versao": "fase-a-v2"}
+    return {"status": "ok", "versao": "fase-a-v3"}
 
 if __name__ == "__main__":
     import uvicorn
