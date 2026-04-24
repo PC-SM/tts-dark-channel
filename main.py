@@ -445,9 +445,12 @@ async def montar(req: VideoRequest):
         nome = req.titulo.encode('ascii', 'ignore').decode().replace(' ', '_')[:60] + "_VIDEO.mp4"
 
         if req.drive_folder_id:
+            print(f"[DRIVE] Obtendo token para folder_id={req.drive_folder_id}")
             token = await get_google_token()
             if token:
+                print(f"[DRIVE] Token obtido, iniciando upload de {nome} ({os.path.getsize(video_path)} bytes)")
                 drive_result = await upload_drive(video_path, nome, req.drive_folder_id, token)
+                print(f"[DRIVE] Resultado upload: {drive_result}")
                 file_id = drive_result.get("id", "")
                 file_link = drive_result.get("webViewLink", "")
                 return {
@@ -459,6 +462,8 @@ async def montar(req: VideoRequest):
                     "duracao_segundos": round(duracao_total),
                     "formato": "mp4"
                 }
+            else:
+                print("[DRIVE] Token nao obtido — verifique GOOGLE_CREDENTIALS")
 
         # Fallback — retorna base64 apenas se não tiver Drive configurado
         with open(video_path, "rb") as f:
